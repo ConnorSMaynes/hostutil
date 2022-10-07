@@ -5,6 +5,7 @@ import socket
 from functools import cache
 import re
 
+from opentelemetry import trace
 from netifaces import interfaces, ifaddresses, AF_INET, AF_INET6
 from python_hosts import Hosts, HostsEntry
 
@@ -25,7 +26,7 @@ __all__ = [
 ]
 
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 
 # src: https://stackoverflow.com/questions/106179/regular-expression-to-match-dns-hostname-or-ip-address
 # updated to inclue underscore, which is allowed on windows
@@ -36,6 +37,9 @@ _IPV4_ADDRESS_LIKE_REGEX = re.compile('^\d*\.\d*\.\d*\.\d*$')
 # hostnames cannot contain ":" (src: https://en.wikipedia.org/wiki/Hostname#Restrictions_on_valid_host_names)
 # and ipv4 does not use this char either, so if included it likely means the user was trying to provide ipv6
 _IPV6_ADDRESS_LIKE_REGEX = re.compile('.*:.*')
+
+
+tracer = trace.get_tracer(__name__)
 
 
 def clean(host: Optional[str]) -> Optional[str]:
@@ -245,11 +249,14 @@ def get_hostname(host: Optional[str] = None) -> str:
 	host = clean(host)
 	if host is None:
 		return socket.gethostname().casefold()
-	# strip off the dns suffix/domain info which should always be separated
-	# out from the hostname of the machine with dots
-	return socket.gethostbyaddr(host)[0].split('.', 1)[0].casefold()
+	with tracer.start_as_current_span('resolve_host_to_hostname') as span:
+		span.set_attribute('host', host)
+		# strip off the dns suffix/domain info which should always be separated
+		# out from the hostname of the machine with dots
+		return socket.gethostbyaddr(host)[0].split('.', 1)[0].casefold()
 
 
+@tracer.start_as_current_span('is_localhost')
 def is_localhost(host: str, hosts_file: bool = True,
 	all_itfs: bool = False, dns: bool = False) -> bool:
 	"""Return True if the given address or hostname is for the 
@@ -278,30 +285,39 @@ def is_localhost(host: str, hosts_file: bool = True,
 		True if host is for the localhost/loopback; False otherwise
 	"""
 	host = clean(host)
+	current_span = trace.get_current_span()
+	current_span.set_attribute('host', host)
 	try:
 		htype = get_likely_type(host)
 	except ValueError:
 		return False
 	if htype == 'address':
-		if _fast_is_localhost_address(host):
-			return True
-		if all_itfs:
-			# cannot cache these addresses because they can change at any time
-			# as the machine switches between interfaces or reconnects
-			for itf_addr in _get_itf_addrs():
-				if itf_addr == host:
-					return True
-		return False
+		with tracer.start_as_current_span('check_address'):
+			if _fast_is_localhost_address(host):
+				return True
+			if all_itfs:
+				with tracer.start_as_current_span('check_all_interfaces_addresses'):
+					# cannot cache these addresses because they can change at any time
+					# as the machine switches between interfaces or reconnects
+					for itf_addr in _get_itf_addrs():
+						if itf_addr == host:
+							return True
+			return False
 	else:
-		if host == get_hostname():
-			return True
-		if hosts_file and host in _get_hosts_localhost_hostnames():
-			return True
-		if dns:
-			try:
-				address = socket.gethostbyname(host)
-			except socket.gaierror:
-				return False
-			return is_localhost(address, hosts_file=hosts_file,
-				all_itfs=all_itfs, dns=dns)
-		return False
+		with tracer.start_as_current_span('check_hostname'):
+			if host == get_hostname():
+				return True
+			if hosts_file:
+				with tracer.start_as_current_span('check_hosts_file'):
+					if host in _get_hosts_localhost_hostnames():
+						return True
+			if dns:
+				with tracer.start_as_current_span('resolve_host_to_address'):
+					try:
+						address = socket.gethostbyname(host)
+					except socket.gaierror:
+						return False
+					else:
+						return is_localhost(address, hosts_file=hosts_file,
+							all_itfs=all_itfs, dns=dns)
+			return False
