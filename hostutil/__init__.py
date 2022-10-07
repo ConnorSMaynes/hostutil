@@ -26,7 +26,7 @@ __all__ = [
 ]
 
 
-__version__ = '1.0.3'
+__version__ = '2.0.0'
 
 # src: https://stackoverflow.com/questions/106179/regular-expression-to-match-dns-hostname-or-ip-address
 # updated to inclue underscore, which is allowed on windows
@@ -257,7 +257,7 @@ def get_hostname(host: Optional[str] = None) -> str:
 
 
 @tracer.start_as_current_span('is_localhost')
-def is_localhost(host: str, hosts_file: bool = True,
+def is_localhost(host: str, hosts_file: bool = False,
 	all_itfs: bool = False, dns: bool = False) -> bool:
 	"""Return True if the given address or hostname is for the 
 	localhost; return False otherwise.
@@ -271,7 +271,7 @@ def is_localhost(host: str, hosts_file: bool = True,
 		hosts_file: Optional. True if you want to check the local hosts
 			file for hostnames mapping to addresses on the localhost.
 			The hosts file is cached after it is read the first time imposing
-			a small one-time cost. Defaults to True.
+			a small one-time cost. Defaults to False.
 		all_itfs: Optional. True if you want to check the addresses
 			of all network interfaces of the local machine against
 			the given address. This may take a few hundred milliseconds.
